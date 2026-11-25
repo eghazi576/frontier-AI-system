@@ -1,0 +1,831 @@
+{
+  "name": "AI Fronter - WhatsApp",
+  "nodes": [
+    {
+      "id": "dadb7a21-ccd6-5804-9839-a7845b04b237",
+      "name": "WhatsApp Inbound",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp-inbound",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "webhookId": "5b0c7b1e-7d0e-4c55-9a43-f0d1e2a3b4c5"
+    },
+    {
+      "id": "1cdfae67-1356-531b-b164-be64e6c288a8",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Turns the Evolution API webhook into simple fields.\nconst body = $input.first().json.body || {};\nconst data = body.data || {};\nconst key = data.key || {};\nconst msg = data.message || {};\n\nlet jid = key.remoteJid || '';\n// Some WhatsApp accounts now show a privacy id (@lid). Use the phone-number id when Evolution gives it.\nif (jid.endsWith('@lid')) jid = key.remoteJidAlt || key.senderPn || jid;\n\nconst type = data.messageType\n  || Object.keys(msg).find(k => !['messageContextInfo', 'base64'].includes(k))\n  || 'unknown';\nconst text = msg.conversation\n  || msg.extendedTextMessage?.text\n  || msg.imageMessage?.caption\n  || msg.videoMessage?.caption\n  || msg.documentMessage?.caption\n  || '';\n\n// Only 1-to-1 chats from customers: no own messages, groups, status updates, channels or broadcasts.\nconst isDirect = Boolean(body.instance) && !key.fromMe\n  && (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid'));\n\nreturn [{\n  json: {\n    instance: body.instance || '',\n    jid,\n    phone: jid.endsWith('@s.whatsapp.net') ? jid.split('@')[0] : '',\n    name: data.pushName || '',\n    type,\n    text,\n    isAudio: type === 'audioMessage' || type === 'pttMessage',\n    audioBase64: msg.base64 || '',\n    isDirect,\n  },\n}];"
+      }
+    },
+    {
+      "id": "1290002a-33fb-53b0-ad81-638a8ae76f92",
+      "name": "Customer Message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.isDirect }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "af2f49ee-6957-59f2-88e1-74b0d7d17faa",
+      "name": "Persona",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select * from fronter_inbound($1, $2, $3, $4);",
+        "options": {
+          "queryReplacement": "={{ [ $json.instance, $json.jid, $json.name, $json.phone ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "id": "e89b82ed-f7e2-5eff-916e-19b64529f660",
+      "name": "Voice Note?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c2",
+              "leftValue": "={{ $('Parse Message').first().json.isAudio }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "db3e7bb3-c9b7-5e3c-9815-0295c1107bf4",
+      "name": "Audio File",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        140
+      ],
+      "parameters": {
+        "jsCode": "// Voice note (base64 from Evolution) -> file for Groq Whisper.\nconst p = $('Parse Message').first().json;\nreturn [{\n  json: {},\n  binary: { file: { data: p.audioBase64, mimeType: 'audio/ogg', fileName: 'voice.ogg' } },\n}];"
+      }
+    },
+    {
+      "id": "7f1bb3a3-cb7c-55b0-945b-85d429a407eb",
+      "name": "Groq Whisper",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/audio/transcriptions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "file"
+            },
+            {
+              "name": "model",
+              "value": "whisper-large-v3"
+            },
+            {
+              "name": "language",
+              "value": "={{ $('Persona').first().json.stt_language || 'ur' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "fronterGroq",
+          "name": "Groq API key"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "e656a5ca-a1c9-54a5-90c0-33c1c28807a7",
+      "name": "User Text",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// The customer's words: typed text, transcribed voice note, or a note about other media.\nconst p = $('Parse Message').first().json;\nlet user_text = (p.text || '').trim();\nlet media = p.type === 'imageMessage' ? 'image' : 'text';\n\nif (p.isAudio) {\n  media = 'audio';\n  user_text = String($input.first().json.text || '').trim()\n    || '[The customer sent a voice note that could not be understood. Politely ask them to type or send it again.]';\n} else if (!user_text) {\n  media = p.type === 'imageMessage' ? 'image' : 'other';\n  user_text = `[The customer sent a ${p.type.replace('Message', '')} without text. You cannot see it; ask what they need.]`;\n}\nreturn [{ json: { user_text, media } }];"
+      }
+    },
+    {
+      "id": "5eef91c7-372f-50ea-bd31-e755c55f3349",
+      "name": "Log Customer Message",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select fronter_log($1::uuid, 'user', $2, $3);",
+        "options": {
+          "queryReplacement": "={{ [ $('Persona').first().json.conversation_id, $json.user_text, $json.media ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "f2383e81-1d18-5e09-ae31-28277799ff27",
+      "name": "AI Mode?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "c3",
+              "leftValue": "={{ $('Persona').first().json.conv_status }}",
+              "rightValue": "ai",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "e5eea6c8-c0b9-5e73-b67d-589e16c954e9",
+      "name": "AI Agent",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        2220,
+        300
+      ],
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $('User Text').first().json.user_text }}",
+        "options": {
+          "systemMessage": "={{ $('Persona').first().json.system_prompt }}",
+          "maxIterations": 8
+        }
+      }
+    },
+    {
+      "id": "73a6e3fc-c0c0-5923-ad62-3a461784a14b",
+      "name": "Gemini",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        560
+      ],
+      "parameters": {
+        "modelName": "models/gemini-flash-latest",
+        "options": {
+          "temperature": 0.4,
+          "maxOutputTokens": 1024
+        }
+      },
+      "credentials": {
+        "googlePalmApi": {
+          "id": "fronterGemini",
+          "name": "Gemini API key"
+        }
+      }
+    },
+    {
+      "id": "b1177a39-0886-56d5-b935-f69387ddcd61",
+      "name": "Memory",
+      "type": "@n8n/n8n-nodes-langchain.memoryPostgresChat",
+      "typeVersion": 1.3,
+      "position": [
+        2140,
+        560
+      ],
+      "parameters": {
+        "sessionIdType": "customKey",
+        "sessionKey": "={{ $('Persona').first().json.conversation_id }}",
+        "tableName": "n8n_chat_histories",
+        "contextWindowLength": 10
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "id": "f086f84e-a6f5-5ec8-b3fa-73ad074ad469",
+      "name": "check_availability",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        2280,
+        560
+      ],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Get the free appointment times. Use before offering or booking any time.",
+        "operation": "executeQuery",
+        "query": "select check_availability($1::uuid, $2) as result;",
+        "options": {
+          "queryReplacement": "={{ [ $('Persona').first().json.conversation_id, $fromAI('date', 'Day to check as YYYY-MM-DD, in the business time zone. Empty string for the next free days.', 'string') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "id": "2e4b60d5-554f-5732-a803-b7068dfe838c",
+      "name": "book_appointment",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        2420,
+        560
+      ],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Book an appointment for this customer in a free slot returned by check_availability.",
+        "operation": "executeQuery",
+        "query": "select book_appointment($1::uuid, $2, $3, $4, $5) as result;",
+        "options": {
+          "queryReplacement": "={{ [ $('Persona').first().json.conversation_id, $fromAI('slot', 'Exact slot as YYYY-MM-DD HH:MM, taken from check_availability', 'string'), $fromAI('customer_name', 'Name of the customer', 'string'), $fromAI('service', 'What the appointment is for, e.g. site visit for Phase 8 plots', 'string'), $fromAI('notes', 'Useful details for the team (budget, preferences). Empty string if none', 'string') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "id": "4db218f5-c06f-551f-bba7-fd1b8544d98b",
+      "name": "my_appointments",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        2560,
+        560
+      ],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "List this customer's upcoming bookings.",
+        "operation": "executeQuery",
+        "query": "select my_appointments($1::uuid) as result;",
+        "options": {
+          "queryReplacement": "={{ [ $('Persona').first().json.conversation_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "id": "d05aec5e-711d-5263-a718-fbf8d6a731e7",
+      "name": "cancel_appointment",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        2700,
+        560
+      ],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Cancel this customer's next upcoming booking. Only after the customer clearly asks to cancel or move it.",
+        "operation": "executeQuery",
+        "query": "select cancel_appointment($1::uuid, $2) as result;",
+        "options": {
+          "queryReplacement": "={{ [ $('Persona').first().json.conversation_id, $fromAI('reason', 'Reason for cancelling, or empty string', 'string') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "id": "3e57c7bd-8db2-52ba-b1d4-6a5c57dc3e05",
+      "name": "save_lead",
+      "type": "n8n-nodes-base.postgresTool",
+      "typeVersion": 2.6,
+      "position": [
+        2840,
+        560
+      ],
+      "parameters": {
+        "descriptionType": "manual",
+        "toolDescription": "Save what you learned about the customer (needs, budget, timeline) for the sales team.",
+        "operation": "executeQuery",
+        "query": "select save_lead($1::uuid, $2, $3, $4) as result;",
+        "options": {
+          "queryReplacement": "={{ [ $('Persona').first().json.conversation_id, $fromAI('summary', 'One or two sentence summary of the customer and what they want', 'string'), $fromAI('details', 'Answers to the qualification questions, e.g. budget 1.5 Cr; cash; wants 10 marla in Phase 8', 'string'), $fromAI('status', 'qualified if they are a real prospect, lost if not interested, otherwise new', 'string') ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      }
+    },
+    {
+      "id": "2e68dfe2-ad36-5496-baf8-8c41d7ca4cb9",
+      "name": "Send Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2580,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://evolution_api:8080/message/sendText/{{ $('Parse Message').first().json.instance }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $('Parse Message').first().json.jid }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $('AI Agent').first().json.output }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "fronterEvolution",
+          "name": "Evolution API key"
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "id": "70a53136-da79-578a-97d0-f6f8b88b85b1",
+      "name": "Log Reply",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2800,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select fronter_log($1::uuid, 'assistant', $2, 'text');",
+        "options": {
+          "queryReplacement": "={{ [ $('Persona').first().json.conversation_id, $('AI Agent').first().json.output ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      },
+      "onError": "continueRegularOutput",
+      "alwaysOutputData": true
+    },
+    {
+      "id": "f1237405-150f-509c-84fa-0ff8e74ad3c5",
+      "name": "Owner Notices",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        3020,
+        300
+      ],
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "select * from take_owner_notifications($1::uuid);",
+        "options": {
+          "queryReplacement": "={{ [ $('Persona').first().json.tenant_id ] }}"
+        }
+      },
+      "credentials": {
+        "postgres": {
+          "id": "fronterPostgres",
+          "name": "Supabase Postgres"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "9e67004e-ba06-5ad6-8f09-b983847988f0",
+      "name": "Notify Owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3240,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "=http://evolution_api:8080/message/sendText/{{ $('Parse Message').first().json.instance }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "keypair",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "number",
+              "value": "={{ $json.owner_number }}"
+            },
+            {
+              "name": "text",
+              "value": "={{ $json.body }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "fronterEvolution",
+          "name": "Evolution API key"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "id": "950bb87f-e1c2-480f-985f-cf9652a29814",
+      "name": "Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        0,
+        -120
+      ],
+      "parameters": {
+        "width": 640,
+        "height": 260,
+        "content": "## AI Fronter: WhatsApp front desk\nOne workflow serves every business. The Evolution instance name in the webhook tells the database which business the message is for (channels.evolution_instance).\n\nCredentials to set: **Supabase Postgres** (session pooler, SSL on), **Gemini API key**, **Groq API key** (Header Auth: Authorization = Bearer ...), **Evolution API key** (Header Auth: apikey = ...).\n\nHuman takeover: set conversations.status = 'human' and the bot goes quiet for that chat (messages are still logged)."
+      }
+    }
+  ],
+  "connections": {
+    "WhatsApp Inbound": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "Customer Message?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Customer Message?": {
+      "main": [
+        [
+          {
+            "node": "Persona",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Persona": {
+      "main": [
+        [
+          {
+            "node": "Voice Note?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Voice Note?": {
+      "main": [
+        [
+          {
+            "node": "Audio File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "User Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Audio File": {
+      "main": [
+        [
+          {
+            "node": "Groq Whisper",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq Whisper": {
+      "main": [
+        [
+          {
+            "node": "User Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "User Text": {
+      "main": [
+        [
+          {
+            "node": "Log Customer Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Customer Message": {
+      "main": [
+        [
+          {
+            "node": "AI Mode?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Mode?": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Reply": {
+      "main": [
+        [
+          {
+            "node": "Log Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Reply": {
+      "main": [
+        [
+          {
+            "node": "Owner Notices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Owner Notices": {
+      "main": [
+        [
+          {
+            "node": "Notify Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Memory": {
+      "ai_memory": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_memory",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "check_availability": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "book_appointment": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "my_appointments": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "cancel_appointment": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "save_lead": {
+      "ai_tool": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "UTC"
+  },
+  "pinData": {},
+  "id": "aiFronterWhatsApp",
+  "versionId": "7891573e-d277-5f5d-a4ce-73257907fabc"
+}
