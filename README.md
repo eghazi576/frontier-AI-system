@@ -43,7 +43,19 @@ pick a time that is really free, and two customers can never take the same last 
 | `n8n/whatsapp-fronter.json` | The n8n workflow to import |
 | `scripts/create-whatsapp-instance.sh` | Connects a WhatsApp number (one per business) |
 | `scripts/build_n8n_workflow.py` | Generates the workflow JSON (optional; you can edit in n8n instead) |
-| `tests/` | Database tests and the fake services used for the end-to-end test |
+| `docker-compose.mock.yml`, `mock/` | Mock mode: test chat page, mock WhatsApp, mock AI, mock voice transcription |
+| `tests/` | Database tests and end-to-end test scripts |
+
+## Try it with no accounts (mock mode)
+
+Runs the whole system on any computer with Docker, with no WhatsApp number, Supabase, Gemini or Groq:
+```bash
+docker compose -f docker-compose.mock.yml up
+```
+Open the test chat at http://localhost:8080, pick a business and chat as a customer. The database, the n8n
+workflow, booking and owner alerts are the real ones; WhatsApp, the AI (a simple rule-based stand-in brain)
+and voice-note transcription are mocked (`mock/`). `node tests/e2e/mock_demo.js` plays sample conversations.
+Reset with `docker compose -f docker-compose.mock.yml down -v`.
 
 ## Setup (about 1 hour)
 

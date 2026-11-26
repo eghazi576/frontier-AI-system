@@ -1,0 +1,58 @@
+# AI Fronter in MOCK MODE: runs the whole system on your computer with no accounts or keys.
+#   docker compose -f docker-compose.mock.yml up
+# Then open the test chat:  http://localhost:8080   (n8n editor: http://localhost:5678)
+#
+# Real parts: the database (same SQL as Supabase), the n8n workflow, booking, owner alerts.
+# Mocked parts: WhatsApp (Evolution API), the AI brain (Gemini) and voice-note transcription (Groq).
+# To reset everything: docker compose -f docker-compose.mock.yml down -v
+services:
+  postgres:            # stands in for Supabase
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_PASSWORD=postgres
+    ports:
+      - "54322:5432"
+    volumes:
+      - ./tests/supabase_stub.sql:/docker-entrypoint-initdb.d/000_supabase_stub.sql:ro
+      - ./db/001_tables.sql:/docker-entrypoint-initdb.d/001_tables.sql:ro
+      - ./db/002_prompt_and_inbound.sql:/docker-entrypoint-initdb.d/002_prompt_and_inbound.sql:ro
+      - ./db/003_booking.sql:/docker-entrypoint-initdb.d/003_booking.sql:ro
+      - ./db/004_security.sql:/docker-entrypoint-initdb.d/004_security.sql:ro
+      - ./db/005_seed.sql:/docker-entrypoint-initdb.d/005_seed.sql:ro
+      - mock_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      retries: 20
+
+  evolution_api:       # mock WhatsApp + mock Gemini + mock Groq + test chat page
+    image: node:24-alpine
+    command: ["node", "/app/mock_services.js"]
+    environment:
+      - N8N_WEBHOOK=http://n8n:5678/webhook/whatsapp-inbound
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./mock:/app:ro
+
+  n8n:
+    image: n8nio/n8n:2.49.6
+    entrypoint: ["/bin/sh", "/mock/n8n-start.sh"]
+    environment:
+      - N8N_ENCRYPTION_KEY=mock-mode-only-not-secret
+      - N8N_SECURE_COOKIE=false
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - GENERIC_TIMEZONE=UTC
+    ports:
+      - "5678:5678"
+    volumes:
+      - ./mock:/mock:ro
+      - ./n8n:/workflows:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      evolution_api:
+        condition: service_started
+
+volumes:
+  mock_pg:

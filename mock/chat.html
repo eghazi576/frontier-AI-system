@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Fronter test chat</title>
+<style>
+  :root { --bg:#efeae2; --panel:#fff; --me:#d9fdd3; --bot:#fff; --head:#075e54; --ink:#111b21; --muted:#667781; --line:#e9edef; --accent:#00a884; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color:var(--ink); background:#d1d7db; }
+  .wrap { display:grid; grid-template-columns: minmax(0, 520px) minmax(0, 340px); gap:16px; justify-content:center; padding:16px; min-height:100vh; }
+  @media (max-width: 900px) { .wrap { grid-template-columns: minmax(0, 1fr); } }
+  .phone { display:flex; flex-direction:column; background:var(--bg); border-radius:12px; overflow:hidden; height:calc(100vh - 32px); min-height:520px; box-shadow:0 2px 12px rgba(0,0,0,.12); }
+  header { background:var(--head); color:#fff; padding:12px 14px; }
+  header h1 { font-size:16px; margin:0 0 6px; }
+  header .row { display:flex; gap:8px; flex-wrap:wrap; }
+  header select, header input { font:inherit; font-size:13px; padding:5px 8px; border-radius:6px; border:0; min-width:0; }
+  header select { flex:2 1 220px; } header input { flex:1 1 110px; }
+  .mock { font-size:12px; opacity:.85; margin-top:6px; }
+  #chat { flex:1; overflow-y:auto; padding:14px; display:flex; flex-direction:column; gap:6px; }
+  .msg { max-width:80%; padding:7px 10px 18px; border-radius:8px; position:relative; white-space:pre-wrap; word-wrap:break-word; box-shadow:0 1px .5px rgba(0,0,0,.13); }
+  .msg.customer { align-self:flex-end; background:var(--me); }
+  .msg.bot { align-self:flex-start; background:var(--bot); }
+  .msg time { position:absolute; right:8px; bottom:3px; font-size:11px; color:var(--muted); }
+  .typing { align-self:flex-start; color:var(--muted); font-size:13px; padding:4px 8px; }
+  form { display:flex; gap:8px; padding:10px; background:#f0f2f5; }
+  form input { flex:1; min-width:0; font:inherit; padding:10px 12px; border-radius:20px; border:0; }
+  button { font:inherit; border:0; border-radius:20px; padding:0 16px; background:var(--accent); color:#fff; cursor:pointer; }
+  button.ghost { background:#fff; color:var(--ink); }
+  aside { background:var(--panel); border-radius:12px; padding:14px; box-shadow:0 2px 12px rgba(0,0,0,.12); align-self:start; }
+  aside h2 { font-size:15px; margin:0 0 8px; }
+  aside p { color:var(--muted); font-size:13px; margin:0 0 10px; }
+  .alert { background:#fff8e1; border-left:3px solid #f5a623; padding:8px 10px; border-radius:4px; margin-bottom:8px; white-space:pre-wrap; font-size:13px; }
+  .tries button { display:block; width:100%; text-align:left; border-radius:8px; padding:7px 10px; margin-bottom:6px; background:#f0f2f5; color:var(--ink); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <section class="phone">
+    <header>
+      <h1>AI Fronter: WhatsApp test chat</h1>
+      <div class="row">
+        <select id="biz" aria-label="Business"></select>
+        <input id="phone" value="923331234567" aria-label="Your test phone number">
+        <input id="name" value="Ali" aria-label="Your name">
+      </div>
+      <div class="mock">Mock mode: no real WhatsApp, and the AI is a simple stand-in brain. Database, n8n workflow and booking are real.</div>
+    </header>
+    <div id="chat"></div>
+    <form id="f">
+      <input id="text" autocomplete="off" placeholder="Type a message as the customer">
+      <button type="button" class="ghost" id="voice" title="Send a mock voice note">🎤</button>
+      <button>Send</button>
+    </form>
+  </section>
+  <aside>
+    <h2>Owner alerts</h2>
+    <p>What the business owner receives on WhatsApp when someone books or cancels.</p>
+    <div id="alerts"><p>None yet.</p></div>
+    <h2 style="margin-top:16px">Try</h2>
+    <div class="tries" id="tries"></div>
+  </aside>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const TRIES = {
+  urdu: ['Assalam o Alaikum', 'Phase 8 mein 10 marla plot ka rate kya hai?', 'Mera budget 1.5 Cr hai, cash', 'Kal site visit book karni hai', '11 baje, mera naam Ali hai', 'Meri booking cancel kar dein'],
+  en: ['Hello', 'What do you have in Levent?', 'I want to book a viewing on Saturday', '11:00 please, my name is Sam', 'Cancel my booking'],
+};
+let last = '';
+async function load() {
+  const list = await fetch('/api/businesses').then(r => r.json());
+  $('biz').innerHTML = list.map(b => `<option value="${b.instance}">${b.name}</option>`).join('');
+  $('biz').onchange = () => { last = ''; tries(); poll(); };
+  tries(); poll(); setInterval(poll, 1500);
+}
+function tries() {
+  const set = $('biz').value === 'fronter_istanbul' ? TRIES.en : TRIES.urdu;
+  $('tries').innerHTML = '';
+  set.forEach(t => { const b = document.createElement('button'); b.textContent = t; b.onclick = () => send(t); $('tries').appendChild(b); });
+}
+const esc = s => String(s).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+const hhmm = iso => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+let waiting = false;
+async function poll() {
+  const q = new URLSearchParams({ instance: $('biz').value, phone: $('phone').value });
+  const d = await fetch('/api/messages?' + q).then(r => r.json());
+  const html = d.chat.map(m => `<div class="msg ${m.from}">${esc(m.text)}<time>${hhmm(m.at)}</time></div>`).join('')
+    + (waiting && d.chat.length && d.chat[d.chat.length - 1].from === 'customer' ? '<div class="typing">typing…</div>' : '');
+  if (html !== last) { $('chat').innerHTML = html || '<p class="typing">Send a message to start.</p>'; $('chat').scrollTop = 1e9; last = html; }
+  $('alerts').innerHTML = d.alerts.length ? d.alerts.map(a => `<div class="alert">${esc(a.text)}</div>`).reverse().join('') : '<p>None yet.</p>';
+}
+async function send(text, voice = false) {
+  if (!text && !voice) return;
+  waiting = true;
+  const r = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instance: $('biz').value, phone: $('phone').value, name: $('name').value, text: voice ? '🎤 Voice note' : text, voice }) }).then(r => r.json());
+  if (!r.ok) { waiting = false; $('chat').insertAdjacentHTML('beforeend', '<p class="typing">Could not reach n8n: ' + esc(r.n8n) + '</p>'); }
+  $('text').value = ''; poll();
+}
+$('f').onsubmit = e => { e.preventDefault(); send($('text').value.trim()); };
+$('voice').onclick = () => send('', true);
+load();
+</script>
+</body>
+</html>
