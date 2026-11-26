@@ -1,0 +1,4 @@
+# HTTPS for n8n. Caddy gets a free Let's Encrypt certificate for $DOMAIN automatically.
+{$DOMAIN} {
+	reverse_proxy n8n:5678
+}

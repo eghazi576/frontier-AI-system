@@ -1,0 +1,35 @@
+# Server add-on (e.g. Oracle Cloud): HTTPS through Caddy, n8n and Evolution only reachable on the server itself.
+#   docker compose -f docker-compose.yml -f docker-compose.server.yml up -d
+# Needs DOMAIN in .env (e.g. myfronter.duckdns.org) pointing to the server's public IP, and ports 80/443 open.
+services:
+  n8n:
+    ports: !override
+      - "127.0.0.1:5678:5678"
+    environment:
+      - N8N_HOST=${DOMAIN}
+      - N8N_PROTOCOL=https
+      - WEBHOOK_URL=https://${DOMAIN}/
+      - N8N_SECURE_COOKIE=true
+
+  evolution_api:
+    ports: !override
+      - "127.0.0.1:8080:8080"
+
+  caddy:
+    image: caddy:2.10-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - n8n
+
+volumes:
+  caddy_data:
+  caddy_config:

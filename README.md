@@ -43,6 +43,7 @@ pick a time that is really free, and two customers can never take the same last 
 | `n8n/whatsapp-fronter.json` | The n8n workflow to import |
 | `scripts/create-whatsapp-instance.sh` | Connects a WhatsApp number (one per business) |
 | `scripts/build_n8n_workflow.py` | Generates the workflow JSON (optional; you can edit in n8n instead) |
+| `docs/oracle-cloud-setup-roman-urdu.md`, `docker-compose.server.yml`, `deploy/` | Free 24/7 server on Oracle Cloud with HTTPS (Roman Urdu guide) |
 | `docs/n8n-guide-roman-urdu.md` | n8n guide in Roman Urdu: import, AI-builder prompt, manual build |
 | `docker-compose.mock.yml`, `mock/` | Mock mode: test chat page, mock WhatsApp, mock AI, mock voice transcription |
 | `tests/` | Database tests and end-to-end test scripts |
